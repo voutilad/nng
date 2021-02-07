@@ -1275,6 +1275,9 @@ NNG_DECL int nng_pipe_getopt_string(nng_pipe, const char *, char **);
 // a library; it will affect all sockets.
 NNG_DECL void nng_closeall(void);
 
+//// XXXXXX MEMTRACK
+NNG_DECL int nng_memtrack(int *, int *);
+
 #endif
 
 #ifdef __cplusplus

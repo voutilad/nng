@@ -1888,3 +1888,18 @@ nng_version(void)
 	return (xstr(NNG_MAJOR_VERSION) "." xstr(NNG_MINOR_VERSION) "." xstr(
 	    NNG_PATCH_VERSION) NNG_RELEASE_SUFFIX);
 }
+
+nni_atomic_int *memtrack_alloc = NULL;
+nni_atomic_int *memtrack_freed = NULL;
+
+int
+nng_memtrack(int *alloc, int *freed)
+{
+	if (memtrack_alloc != NULL && memtrack_freed != NULL) {
+		*alloc = nni_atomic_get(memtrack_alloc);
+		*freed = nni_atomic_get(memtrack_freed);
+		return 0;
+	}
+
+	return -1;
+}

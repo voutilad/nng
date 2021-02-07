@@ -32,15 +32,26 @@ static pfnSetThreadDescription set_thread_desc;
 
 #include <stdlib.h>
 
+extern nni_atomic_int *memtrack_alloc;
+extern nni_atomic_int *memtrack_freed;
+
 void *
 nni_alloc(size_t sz)
 {
+	if (memtrack_alloc == NULL) {
+		nni_atomic_init(memtrack_alloc);
+	}
+	nni_atomic_add(memtrack_alloc, sz);
 	return (sz > 0 ? malloc(sz) : NULL);
 }
 
 void *
 nni_zalloc(size_t sz)
 {
+	if (memtrack_alloc == NULL) {
+		nni_atomic_init(memtrack_alloc);
+	}
+	nni_atomic_add(memtrack_alloc, sz);
 	return (sz > 0 ? calloc(1, sz) : NULL);
 }
 
@@ -48,6 +59,10 @@ void
 nni_free(void *b, size_t z)
 {
 	NNI_ARG_UNUSED(z);
+	if (memtrack_freed == NULL) {
+		nni_atomic_init(memtrack_freed);
+	}
+	nni_atomic_add(memtrack_freed, z);
 	free(b);
 }
 
