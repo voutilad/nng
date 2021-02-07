@@ -35,7 +35,7 @@ nni_alloc(size_t sz)
 		memtrack_alloc = malloc(sizeof(memtrack_alloc));
 		nni_atomic_init64(memtrack_alloc);
 	}
-	nni_atomic_add(memtrack_alloc, sz);
+	nni_atomic_add64(memtrack_alloc, sz);
 	return (sz > 0 ? malloc(sz) : NULL);
 }
 
@@ -46,7 +46,7 @@ nni_zalloc(size_t sz)
 		memtrack_alloc = malloc(sizeof(memtrack_alloc));
 		nni_atomic_init64(memtrack_alloc);
 	}
-	nni_atomic_add(memtrack_alloc, sz);
+	nni_atomic_add64(memtrack_alloc, sz);
 	return (sz > 0 ? calloc(1, sz) : NULL);
 }
 
