@@ -58,7 +58,7 @@ nni_free(void *ptr, size_t size)
 		memtrack_freed = malloc(sizeof(memtrack_freed));
 		nni_atomic_init64(memtrack_freed);
 	}
-	nni_atomic_add(memtrack_freed, size);
+	nni_atomic_add64(memtrack_freed, size);
 	free(ptr);
 }
 
