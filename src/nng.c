@@ -1889,11 +1889,11 @@ nng_version(void)
 	    NNG_PATCH_VERSION) NNG_RELEASE_SUFFIX);
 }
 
-extern nni_atomic_int *memtrack_alloc;
-extern nni_atomic_int *memtrack_freed;
+extern nni_atomic_u64 *memtrack_alloc;
+extern nni_atomic_u64 *memtrack_freed;
 
 int
-nng_memtrack(int *alloc, int *freed)
+nng_memtrack(uint64_t *alloc, uint64_t *freed)
 {
 	return nni_memtrack(alloc, freed);
 }

@@ -70,7 +70,7 @@ extern const char *nni_plat_strerror(int);
 //
 
 // XXX memtrack
-extern int nni_memtrack(int *, int *);
+extern int nni_memtrack(uint64_t *, uint64_t *);
 
 // nni_alloc allocates memory.  In most cases this can just be malloc().
 // However, you may provide a different allocator, for example it is

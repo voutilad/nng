@@ -1276,7 +1276,7 @@ NNG_DECL int nng_pipe_getopt_string(nng_pipe, const char *, char **);
 NNG_DECL void nng_closeall(void);
 
 //// XXXXXX MEMTRACK
-NNG_DECL int nng_memtrack(int *, int *);
+NNG_DECL int nng_memtrack(uint64_t *, uint64_t *);
 
 #endif
 
