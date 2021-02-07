@@ -69,6 +69,9 @@ extern const char *nni_plat_strerror(int);
 // Memory Management
 //
 
+// XXX memtrack
+extern int nni_memtrack(int *, int *);
+
 // nni_alloc allocates memory.  In most cases this can just be malloc().
 // However, you may provide a different allocator, for example it is
 // possible to use a slab allocator or somesuch.  It is permissible for this

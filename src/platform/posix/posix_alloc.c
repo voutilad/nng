@@ -13,14 +13,26 @@
 
 #include <stdlib.h>
 
-extern nni_atomic_int *memtrack_alloc;
-extern nni_atomic_int *memtrack_freed;
+nni_atomic_int *memtrack_alloc = NULL;
+nni_atomic_int *memtrack_freed = NULL;
+
+int
+nni_memtrack(int *alloc, int *freed)
+{
+	if (memtrack_alloc != NULL && memtrack_freed != NULL) {
+		*alloc = nni_atomic_get(memtrack_alloc);
+		*freed = nni_atomic_get(memtrack_freed);
+		return 0;
+	}
+	return -1;
+}
 
 // POSIX memory allocation.  This is pretty much standard C.
 void *
 nni_alloc(size_t sz)
 {
 	if (memtrack_alloc == NULL) {
+		memtrack_alloc = malloc(sizeof(memtrack_alloc));
 		nni_atomic_init(memtrack_alloc);
 	}
 	nni_atomic_add(memtrack_alloc, sz);
@@ -31,6 +43,7 @@ void *
 nni_zalloc(size_t sz)
 {
 	if (memtrack_alloc == NULL) {
+		memtrack_alloc = malloc(sizeof(memtrack_alloc));
 		nni_atomic_init(memtrack_alloc);
 	}
 	nni_atomic_add(memtrack_alloc, sz);
@@ -42,6 +55,7 @@ nni_free(void *ptr, size_t size)
 {
 	NNI_ARG_UNUSED(size);
 	if (memtrack_freed == NULL) {
+		memtrack_freed = malloc(sizeof(memtrack_freed));
 		nni_atomic_init(memtrack_freed);
 	}
 	nni_atomic_add(memtrack_freed, size);
