@@ -1,30 +1,51 @@
+#include <stdio.h>
 #include <string.h>
 #include <tls.h>
 
 #include "core/nng_impl.h"
 #include <nng/supplemental/tls/engine.h>
 
+#define ERR printf("err!: %s\n", __func__)
+
 struct nng_tls_engine_conn {
 	void *              tls;
 	struct tls *        ctx;
+        struct tls *        server_ctx;
 };
 
 struct nng_tls_engine_config {
 	struct tls_config * config;
         char *              server_name;
+        enum nng_tls_mode   mode;
 };
 
+
 static int
-config_init()
+config_auth_mode(nng_tls_engine_config *, nng_tls_auth_mode);
+
+static int
+config_init(nng_tls_engine_config *cfg, enum nng_tls_mode mode)
 {
-        // TODO
-	return -1;
+        cfg->config = tls_config_new();
+        cfg->mode = mode;
+
+        tls_config_set_ciphers(cfg->config, "all");
+        tls_config_set_dheparams(cfg->config, "auto");
+        tls_config_set_ecdhecurves(cfg->config, "secp224r1");
+
+        tls_config_insecure_noverifycert(cfg->config);
+        tls_config_insecure_noverifyname(cfg->config);
+        tls_config_insecure_noverifytime(cfg->config);
+
+        tls_config_set_protocols(cfg->config, TLS_PROTOCOLS_ALL);
+
+        return config_auth_mode(cfg, NNG_TLS_AUTH_MODE_OPTIONAL);
 }
 
 static void
 config_fini(nng_tls_engine_config *cfg)
 {
-        // TODO
+        tls_config_free(cfg->config);
 }
 
 static void
@@ -33,74 +54,326 @@ conn_fini(nng_tls_engine_conn *ec)
 	tls_free(ec->ctx);
 }
 
+ssize_t
+net_read(struct tls *ctx, void *buf, size_t buflen, void *cb_arg)
+{
+        NNI_ARG_UNUSED(ctx);
+        void * tls = cb_arg;
+        size_t sz = buflen;
+        int    rv;
+
+        rv = nng_tls_engine_recv(tls, buf, &sz);
+        switch (rv) {
+        case 0:
+                return ((ssize_t) sz);
+        case NNG_EAGAIN:
+                return (TLS_WANT_POLLIN);
+        default:
+                ERR;
+                return (-1);
+        }
+}
+
+ssize_t
+net_send(struct tls *ctx, const void *buf, size_t buflen, void *cb_arg)
+{
+        NNI_ARG_UNUSED(ctx);
+        void * tls = cb_arg;
+        size_t sz = buflen;
+        int    rv;
+
+        rv = nng_tls_engine_send(tls, buf, &sz);
+        switch (rv) {
+        case 0:
+                return ((ssize_t) sz);
+        case NNG_EAGAIN:
+                return (TLS_WANT_POLLOUT);
+        default:
+                ERR;
+                return (-1);
+        }
+}
+
 static int
 conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
 {
-	// TODO: initialize config? or client?
-	return -1;
+        int         rv = 0;
+        struct tls *cctx;
+
+        ec->tls = tls;
+        if (cfg->mode == NNG_TLS_MODE_SERVER) {
+                ec->ctx = tls_server();
+                rv = tls_configure(ec->ctx, cfg->config);
+                if (rv != 0) {
+                        printf("%s: %s: %s\n", __func__, "tls_configure",
+                               tls_error(ec->ctx));
+                        return (rv);
+                }
+
+                rv = tls_accept_cbs(ec->ctx, &cctx, net_read,
+                                    net_send, ec->tls);
+                if (rv != 0) {
+                        printf("ERR issue in tls_accept_cbs: ");
+                }
+                ec->server_ctx = cctx;
+        } else {
+                ec->ctx = tls_client();
+                rv = tls_configure(ec->ctx, cfg->config);
+                if (rv != 0) {
+                        printf("%s: %s: %s\n", __func__, "tls_configure",
+                               tls_error(ec->ctx));
+                        return (rv);
+                }
+
+                rv = tls_connect_cbs(ec->ctx, net_read, net_send, ec->tls,
+                                     cfg->server_name);
+        }
+        if (rv != 0) {
+                        printf("ERR: %s: %s\n", __func__, tls_error(ec->ctx));
+                        return (rv);
+        }
+
+	return (0);
 }
 
 static void
 conn_close(nng_tls_engine_conn *ec)
 {
-	// TODO
+	(void) tls_close(ec->ctx);
 }
 
 static int
-conn_recv()
+conn_recv(nng_tls_engine_conn *ec, uint8_t *buf, size_t *szp)
 {
-	// TODO
-	return -1;
+	ssize_t     sz;
+        struct tls *ctx;
+
+        if (ec->server_ctx != NULL) {
+                ctx = ec->server_ctx;
+        } else {
+                ctx = ec->ctx;
+        }
+
+        if ((sz = tls_read(ctx, buf, *szp)) < 0) {
+                switch (sz) {
+                case TLS_WANT_POLLIN:
+                case TLS_WANT_POLLOUT:
+                        return (NNG_EAGAIN);
+                default:
+                        ERR;
+                        return (int) sz;
+                }
+        }
+        *szp = (size_t) sz;
+	return (0);
 }
 
 static int
-conn_send()
+conn_send(nng_tls_engine_conn *ec, const uint8_t *buf, size_t *szp)
 {
-	// TODO
-	return -1;
+	ssize_t     sz;
+        struct tls *ctx;
+
+        if (ec->server_ctx != NULL) {
+                ctx = ec->server_ctx;
+        } else {
+                ctx = ec->ctx;
+        }
+
+        if ((sz = tls_write(ctx, buf, *szp)) < 0) {
+                switch (sz) {
+                case TLS_WANT_POLLIN:
+                case TLS_WANT_POLLOUT:
+                        return (NNG_EAGAIN);
+                default:
+                        printf("!!!! %s: %s\n", __func__, tls_error(ec->ctx));
+                        return (int) sz;
+                }
+        }
+        *szp = (size_t) sz;
+        return (0);
 }
 
 static int
-conn_handshake()
+conn_handshake(nng_tls_engine_conn *ec)
 {
-	// TODO
-	return -1;
+        NNI_ARG_UNUSED(ec);
+        return 0;
+/*
+        int         rv;
+        struct tls *ctx;
+
+        if (ec->server_ctx != NULL) {
+                ctx = ec->server_ctx;
+        } else {
+                ctx = ec->ctx;
+        }
+
+        rv = tls_handshake(ctx);
+        switch (rv) {
+        case TLS_WANT_POLLIN:
+        case TLS_WANT_POLLOUT:
+                return (NNG_EAGAIN);
+        case 0:
+                return (0);
+        default:
+                ERR;
+                return (rv);
+	}
+*/
 }
 
 static bool
 conn_verified(nng_tls_engine_conn *ec)
 {
-	// TODO
-	return -1;
+        struct tls *ctx;
+
+        if (ec->server_ctx != NULL) {
+                ctx = ec->server_ctx;
+        } else {
+                ctx = ec->ctx;
+        }
+
+        if (tls_peer_cert_provided(ctx) == 1) {
+                return true;
+        }
+        return false;
 }
 
+// See https://man.openbsd.org/tls_config_set_protocols.3
 static int
 config_version(nng_tls_engine_config *cfg, nng_tls_version min_ver,
     nng_tls_version max_ver)
 {
-	// TODO
-	return -1;
+        int rv;
+	uint32_t versions = TLS_PROTOCOLS_ALL;
+
+        if (min_ver > max_ver) {
+                return (NNG_ENOTSUP);
+        }
+
+        // TODO: check if NNG_TLS_1_x lines up natively with the
+        // TLS_PROTOCOL_TLSv1_x stuff and we can skip this
+
+        switch (min_ver) {
+        case NNG_TLS_1_0:
+                break;
+        case NNG_TLS_1_1:
+                versions ^= (TLS_PROTOCOL_TLSv1_0);
+                break;
+        case NNG_TLS_1_2:
+                versions ^= (TLS_PROTOCOL_TLSv1_0 | TLS_PROTOCOL_TLSv1_1);
+                break;
+        case NNG_TLS_1_3:
+                versions = TLS_PROTOCOL_TLSv1_3;
+                break;
+        default:
+                ERR;
+                return (NNG_ENOTSUP);
+        }
+
+        switch (max_ver) {
+        case NNG_TLS_1_0:
+                versions = TLS_PROTOCOL_TLSv1_0;
+                break;
+        case NNG_TLS_1_1:
+                versions ^= (TLS_PROTOCOL_TLSv1_2 | TLS_PROTOCOL_TLSv1_3);
+                break;
+        case NNG_TLS_1_2:
+                versions ^= TLS_PROTOCOL_TLSv1_3;
+                break;
+        case NNG_TLS_1_3:
+                break;
+        default:
+                ERR;
+                return (NNG_ENOTSUP);
+        }
+
+        rv = tls_config_set_protocols(cfg->config, versions);
+        if (rv != 0) {
+                ERR;
+        }
+
+	return (rv);
 }
 
 static int
-config_auth_mode()
+config_auth_mode(nng_tls_engine_config *cfg, nng_tls_auth_mode mode)
 {
-	// TODO
-	return -1;
+	switch (mode) {
+        case NNG_TLS_AUTH_MODE_NONE:
+                tls_config_insecure_noverifycert(cfg->config);
+                tls_config_insecure_noverifyname(cfg->config);
+                tls_config_insecure_noverifytime(cfg->config);
+                return (0);
+        case NNG_TLS_AUTH_MODE_OPTIONAL:
+                tls_config_verify_client_optional(cfg->config);
+                return (0);
+        case NNG_TLS_AUTH_MODE_REQUIRED:
+                tls_config_verify(cfg->config);
+                return (0);
+        default:
+                ERR;
+                return (NNG_EINVAL);
+        }
 }
 
 static int
-config_ca_chain()
+config_ca_chain(nng_tls_engine_config *cfg, const char *certs, const char *crl)
 {
-	// TODO
-	return -1;
+        size_t         len;
+        const uint8_t *pem;
+        int            rv;
+
+        // Certs and CRL are already in memory, NUL-terminated.
+        pem = (const uint8_t *) certs;
+        len = strlen(certs);
+
+        if ((rv = tls_config_set_ca_mem(cfg->config, pem, len)) != 0) {
+                ERR;
+                return (rv);
+        }
+        if (crl != NULL) {
+                pem = (const uint8_t *) crl;
+                len = strlen(crl);
+                if ((rv = tls_config_set_crl_mem(cfg->config, pem, len)) != 0) {
+                        ERR;
+                        return (rv);
+                }
+        }
+
+        // TODO: does libtls support setting the CA chain to just the provided
+        // pem and crl? Is that even sane?
+
+	return (0);
 }
 
 static int
-config_own_cert()
+config_own_cert(nng_tls_engine_config *cfg, const char *cert, const char *_key,
+    const char *pass)
 {
-	// TODO
-	return -1;
+        NNI_ARG_UNUSED(pass);
+        size_t         plen;
+        size_t         klen;
+        const uint8_t *pem;
+        const uint8_t *key;
+        int            rv;
+
+        // XXX: for now, we don't support encrypted keys as libtls needs to do
+        // the file loading if we're going to support it :-(
+
+        pem = (const uint8_t *) cert;
+        key = (const uint8_t *) _key;
+        plen = strlen(cert);
+        klen = strlen(_key);
+
+        rv = tls_config_set_keypair_mem(cfg->config, pem, plen, key, klen);
+        if (rv != 0) {
+                ERR;
+                return (rv);
+        }
+
+	return (0);
 }
 
 static int
@@ -155,6 +428,10 @@ nng_tls_engine_init_libtls(void)
         int rv;
 
         rv = nng_tls_engine_register(&tls_engine_libtls);
+        if (rv != 0) {
+                ERR;
+        }
+
         return (rv);
 }
 
