@@ -8,6 +8,7 @@
 //
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include <tls.h>
 
@@ -18,7 +19,7 @@ struct nng_tls_engine_conn {
 	void *              tls;
 	struct tls *        ctx;
         struct tls *        server_ctx;
-        // XXX: we diverge from the mbedTLS engine can access cfg->server_name
+        // XXX: we explicilty link to the config so we can access server_name
         struct nng_tls_engine_config * cfg;
 };
 
@@ -29,6 +30,8 @@ struct nng_tls_engine_config {
 };
 
 
+#define CERT_FAIL         "certificate verification"
+#define HANDSHAKE_FAIL    "handshake failed"
 
 static int
 tls_error_lookup(struct tls *ctx)
@@ -36,15 +39,18 @@ tls_error_lookup(struct tls *ctx)
         const char *err;
 
         err = tls_error(ctx);
+        if (err == NULL) {
+                return (0);
+        }
 
-        if (nni_strncasecmp(err, "certificate verification", 24) == 0) {
+        if (nni_strncasecmp(err, CERT_FAIL, strlen(CERT_FAIL)) == 0) {
                 return NNG_EPEERAUTH;
         }
 
-        if (nni_strncasecmp(err, "handshake failed", 16) == 0) {
+        if (nni_strncasecmp(err, HANDSHAKE_FAIL, strlen(HANDSHAKE_FAIL)) == 0) {
                 return NNG_EPEERAUTH;
         }
-        return -1;
+        return (NNG_EINVAL);
 }
 
 static ssize_t
@@ -178,6 +184,7 @@ conn_handshake(nng_tls_engine_conn *ec)
         case 0:
                 return (0);
         default:
+                printf("DEBUG(%s): %s\n", __func__, tls_error(ctx));
                 return (tls_error_lookup(ctx));
         }
 }
@@ -262,7 +269,10 @@ conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
         // certificates, it might fail here.
         rv = tls_configure(ec->ctx, cfg->config);
         if (rv != 0) {
-                goto err;
+                printf("DEBUG(%s): tls_configure: '%s'\n", __func__,
+                       tls_error(ec->ctx));
+                rv = tls_error_lookup(ec->ctx);
+                return (rv);
         }
 
         // Configure the appropriate io callbacks. For a listener, this creates
@@ -276,21 +286,17 @@ conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
                                      cfg->server_name);
         }
         if (rv != 0) {
-                goto err;
+                return (tls_error_lookup(ec->ctx));
         }
 
         ec->server_ctx = cctx;
 	return (0);
-
-err:
-        tls_free(ec->ctx);
-        return (tls_error_lookup(ec->ctx));
 }
 
 static void
 conn_fini(nng_tls_engine_conn *ec)
 {
-        if (ec->server_ctx != NULL) {
+        if (ec->server_ctx) {
                 tls_free(ec->server_ctx);
         }
 
@@ -382,6 +388,8 @@ config_ca_chain(nng_tls_engine_config *cfg, const char *certs, const char *crl)
         len = strlen(certs);
 
         if ((rv = tls_config_set_ca_mem(cfg->config, pem, len)) != 0) {
+                printf("DEBUG(%s): tls_config_set_ca_mem: '%s'\n", __func__,
+                       tls_config_error(cfg->config));
                 return (rv);
         }
         if (crl != NULL) {
@@ -410,12 +418,12 @@ config_own_cert(nng_tls_engine_config *cfg, const char *cert, const char *key,
         // XXX: for now, we don't support encrypted keys as libtls needs to do
         // the file loading if we're going to support it :-(
 
-        clen = strlen(cert);
-        klen = strlen(key);
+        clen = strlen(cert) + 1;
+        klen = strlen(key) + 1;
 
-        rv = tls_config_set_keypair_mem(cfg->config, (uint8_t *) cert, clen,
-                                        (uint8_t *) key, klen);
+        rv = tls_config_set_keypair_mem(cfg->config, cert, clen, key, klen);
         if (rv != 0) {
+                printf("DEBUG(%s): %s\n", __func__, tls_config_error(cfg->config));
                 return (rv);
         }
 

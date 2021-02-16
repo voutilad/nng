@@ -13,6 +13,8 @@ if (NNG_TLS_ENGINE STREQUAL "libtls")
   nng_defines(NNG_TLS_ENGINE_FINI=nng_tls_engine_fini_libtls)
   nng_defines(NNG_SUPP_TLS)
 
+  nng_defines(NNG_USING_LIBTLS)
+
   #TODO: portable logic for finding libtls
   find_library(LIBTLS_LIB "tls")
   message("found tls at: ${LIBTLS_LIB}")
