@@ -169,47 +169,67 @@ static int
 conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
 {
         int         rv = 0;
-        struct tls *cctx;
+        struct tls *cctx = NULL;
 
+        // Keep a copy of the opaque nng tls pointer
         ec->tls = tls;
+
+        // Initialize a new TLS context
         if (cfg->mode == NNG_TLS_MODE_SERVER) {
                 ec->ctx = tls_server();
-                rv = tls_configure(ec->ctx, cfg->config);
-                if (rv != 0) {
-                        printf("%s: %s: %s\n", __func__, "tls_configure",
-                               tls_error(ec->ctx));
-                        return (rv);
+                if (ec->ctx == NULL) {
+                        nni_plat_printf("%s: tls_server create failed\n",
+                                        __func__);
+                        return (-1);
                 }
-
-                rv = tls_accept_cbs(ec->ctx, &cctx, net_read,
-                                    net_send, ec->tls);
-                if (rv != 0) {
-                        printf("ERR issue in tls_accept_cbs: ");
-                }
-                ec->server_ctx = cctx;
         } else {
                 ec->ctx = tls_client();
-                rv = tls_configure(ec->ctx, cfg->config);
-                if (rv != 0) {
-                        printf("%s: %s: %s\n", __func__, "tls_configure",
-                               tls_error(ec->ctx));
-                        return (rv);
+                if (ec->ctx == NULL ){
+                        nni_plat_printf("%s: tls_client create failed\n",
+                                        __func__);
+                        return (-1);
                 }
+        }
 
+        // Apply the given configuration. If there are problems with keys or
+        // certificates, it might fail here.
+        rv = tls_configure(ec->ctx, cfg->config);
+        if (rv != 0) {
+                goto err;
+        }
+
+        // Configure the appropriate io callbacks. For a listener, this creates
+        // a new/additional TLS context (cctx).
+        // TODO: figure out if the original context (ctx) is still required
+        if (cfg->mode == NNG_TLS_MODE_SERVER) {
+                rv = tls_accept_cbs(ec->ctx, &cctx, net_read, net_send,
+                                    ec->tls);
+        } else {
                 rv = tls_connect_cbs(ec->ctx, net_read, net_send, ec->tls,
                                      cfg->server_name);
         }
         if (rv != 0) {
-                        printf("ERR: %s: %s\n", __func__, tls_error(ec->ctx));
-                        return (rv);
+                goto err;
         }
 
+        ec->server_ctx = cctx;
 	return (0);
+
+err:
+        tls_free(ec->ctx);
+        // TODO: how can we convey the root cause back to nng?
+        nni_plat_printf("%s: %s: %s\n", __func__, "tls_configure",
+                        tls_error(ec->ctx));
+        return (rv);
 }
 
 static void
 conn_fini(nng_tls_engine_conn *ec)
 {
+        if (ec->server_ctx != NULL) {
+                tls_free(ec->server_ctx);
+        }
+
 	tls_free(ec->ctx);
 }
 
