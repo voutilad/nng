@@ -18,6 +18,8 @@ struct nng_tls_engine_conn {
 	void *              tls;
 	struct tls *        ctx;
         struct tls *        server_ctx;
+        // XXX: we diverge from the mbedTLS engine can access cfg->server_name
+        struct nng_tls_engine_config * cfg;
 };
 
 struct nng_tls_engine_config {
@@ -26,7 +28,26 @@ struct nng_tls_engine_config {
         enum nng_tls_mode   mode;
 };
 
-ssize_t
+
+
+static int
+tls_error_lookup(struct tls *ctx)
+{
+        const char *err;
+
+        err = tls_error(ctx);
+
+        if (nni_strncasecmp(err, "certificate verification", 24) == 0) {
+                return NNG_EPEERAUTH;
+        }
+
+        if (nni_strncasecmp(err, "handshake failed", 16) == 0) {
+                return NNG_EPEERAUTH;
+        }
+        return -1;
+}
+
+static ssize_t
 net_read(struct tls *ctx, void *buf, size_t buflen, void *cb_arg)
 {
         NNI_ARG_UNUSED(ctx);
@@ -45,7 +66,7 @@ net_read(struct tls *ctx, void *buf, size_t buflen, void *cb_arg)
         }
 }
 
-ssize_t
+static ssize_t
 net_send(struct tls *ctx, const void *buf, size_t buflen, void *cb_arg)
 {
         NNI_ARG_UNUSED(ctx);
@@ -63,6 +84,7 @@ net_send(struct tls *ctx, const void *buf, size_t buflen, void *cb_arg)
                 return (-1);
         }
 }
+
 static void
 conn_close(nng_tls_engine_conn *ec)
 {
@@ -97,6 +119,8 @@ conn_recv(nng_tls_engine_conn *ec, uint8_t *buf, size_t *szp)
                 case TLS_WANT_POLLOUT:
                         return (NNG_EAGAIN);
                 default:
+                        // printf("TLS conn_recv error: %s\n", tls_error(ctx));
+                        sz = tls_error_lookup(ctx);
                         return (int) sz;
                 }
         }
@@ -122,6 +146,9 @@ conn_send(nng_tls_engine_conn *ec, const uint8_t *buf, size_t *szp)
                 case TLS_WANT_POLLOUT:
                         return (NNG_EAGAIN);
                 default:
+                        // Cert verification can fail here
+                        // printf("TLS conn_send error: %s\n", tls_error(ctx));
+                        sz = tls_error_lookup(ctx);
                         return (int) sz;
                 }
         }
@@ -129,19 +156,12 @@ conn_send(nng_tls_engine_conn *ec, const uint8_t *buf, size_t *szp)
         return (0);
 }
 
+// XXX: Explicit calls of tls_handshake(3) are optional with libtls since it
+// will auto-handshake on send/recv.
 static int
 conn_handshake(nng_tls_engine_conn *ec)
 {
-        NNI_ARG_UNUSED(ec);
-
-        // XXX: manual handshakes are optional with libtls, see:
-        //      http://man.openbsd.org/tls_handshake#tls_handshake
-        return 0;
-}
-
-static bool
-conn_verified(nng_tls_engine_conn *ec)
-{
+        int         rv;
         struct tls *ctx;
 
         if (ec->server_ctx != NULL) {
@@ -150,11 +170,63 @@ conn_verified(nng_tls_engine_conn *ec)
                 ctx = ec->ctx;
         }
 
-        // There's not true analog with libtls, but we can check if the peer
-        // provided a certificate.
-        if (tls_peer_cert_provided(ctx) == 1) {
-                return true;
+        rv = tls_handshake(ctx);
+        switch (rv) {
+        case TLS_WANT_POLLIN:
+        case TLS_WANT_POLLOUT:
+                return (NNG_EAGAIN);
+        case 0:
+                return (0);
+        default:
+                return (tls_error_lookup(ctx));
         }
+}
+
+// There's no true analog with libtls, but we can check if the peer provided a
+// certificate and perform some ad-hoc verification based on our current auth
+// mode.
+static bool
+conn_verified(nng_tls_engine_conn *ec)
+{
+        struct tls       *ctx;
+        time_t            time;
+        enum nng_tls_mode mode;
+        const char       *name = NULL;
+
+        if (ec->server_ctx != NULL) {
+                ctx = ec->server_ctx;
+        } else {
+                ctx = ec->ctx;
+        }
+
+        time = (time_t) nni_clock();
+
+        if (ec->cfg) {
+                name = ec->cfg->server_name;
+                mode = ec->cfg->mode;
+        }
+
+
+        // Per the man pages, these tls_peer_* functions only succeed after the
+        // handshake completes. Otherwise, they return errors.
+        if (tls_peer_cert_provided(ctx) == 1) {
+                // First, check time
+                if (tls_peer_cert_notbefore(ctx) < time
+                    && tls_peer_cert_notafter(ctx) < time) {
+
+                        // In server mode, cfg->server_name is NULL
+                        if (mode == NNG_TLS_MODE_SERVER) {
+                                name = tls_conn_servername(ctx);
+                        }
+
+                        if (name &&
+                            tls_peer_cert_contains_name(ctx, name) == 1) {
+                                return true;
+                        }
+                        // XXX: we do not check issuer at the moment.
+                }
+        }
+
         return false;
 }
 
@@ -165,8 +237,9 @@ conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
         int         rv = 0;
         struct tls *cctx = NULL;
 
-        // Keep a copy of the opaque nng tls pointer
+        // Keep a copy of the opaque nng tls pointer and engine config
         ec->tls = tls;
+        ec->cfg = cfg;
 
         // Initialize a new TLS context
         if (cfg->mode == NNG_TLS_MODE_SERVER) {
@@ -211,10 +284,7 @@ conn_init(nng_tls_engine_conn *ec, void *tls, nng_tls_engine_config *cfg)
 
 err:
         tls_free(ec->ctx);
-        // TODO: how can we convey the root cause back to nng?
-        nni_plat_printf("%s: %s: %s\n", __func__, "tls_configure",
-                        tls_error(ec->ctx));
-        return (rv);
+        return (tls_error_lookup(ec->ctx));
 }
 
 static void
@@ -289,9 +359,11 @@ config_auth_mode(nng_tls_engine_config *cfg, nng_tls_auth_mode mode)
                 return (0);
         case NNG_TLS_AUTH_MODE_OPTIONAL:
                 tls_config_verify_client_optional(cfg->config);
+                tls_config_insecure_noverifyname(cfg->config);
                 return (0);
         case NNG_TLS_AUTH_MODE_REQUIRED:
                 tls_config_verify(cfg->config);
+                tls_config_verify_client(cfg->config);
                 return (0);
         default:
                 return (NNG_EINVAL);
@@ -368,15 +440,26 @@ config_server_name(nng_tls_engine_config *cfg, const char *name)
 static int
 config_init(nng_tls_engine_config *cfg, enum nng_tls_mode mode)
 {
+        int rv;
+
         cfg->config = tls_config_new();
         cfg->mode = mode;
 
-        return config_auth_mode(cfg, NNG_TLS_AUTH_MODE_OPTIONAL);
+        if (mode == NNG_TLS_MODE_SERVER) {
+                rv = config_auth_mode(cfg, NNG_TLS_AUTH_MODE_NONE);
+        } else {
+                rv = config_auth_mode(cfg, NNG_TLS_AUTH_MODE_REQUIRED);
+        }
+
+        return (rv);
 }
 
 static void
 config_fini(nng_tls_engine_config *cfg)
 {
+        if (cfg->server_name) {
+                nni_strfree(cfg->server_name);
+        }
         tls_config_free(cfg->config);
 }
 
