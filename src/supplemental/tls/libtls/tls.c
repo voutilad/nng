@@ -8,14 +8,11 @@
 //
 
 #include <stdbool.h>
-#include <stdio.h>
 #include <string.h>
 #include <tls.h>
 
 #include "core/nng_impl.h"
 #include <nng/supplemental/tls/engine.h>
-
-#define ERR printf("err!: %s\n", __func__)
 
 struct nng_tls_engine_conn {
 	void *              tls;
@@ -44,7 +41,6 @@ net_read(struct tls *ctx, void *buf, size_t buflen, void *cb_arg)
         case NNG_EAGAIN:
                 return (TLS_WANT_POLLIN);
         default:
-                ERR;
                 return (-1);
         }
 }
@@ -64,7 +60,6 @@ net_send(struct tls *ctx, const void *buf, size_t buflen, void *cb_arg)
         case NNG_EAGAIN:
                 return (TLS_WANT_POLLOUT);
         default:
-                ERR;
                 return (-1);
         }
 }
@@ -102,7 +97,6 @@ conn_recv(nng_tls_engine_conn *ec, uint8_t *buf, size_t *szp)
                 case TLS_WANT_POLLOUT:
                         return (NNG_EAGAIN);
                 default:
-                        ERR;
                         return (int) sz;
                 }
         }
@@ -261,7 +255,6 @@ config_version(nng_tls_engine_config *cfg, nng_tls_version min_ver,
                 versions = TLS_PROTOCOL_TLSv1_3;
                 break;
         default:
-                ERR;
                 return (NNG_ENOTSUP);
         }
 
@@ -278,15 +271,10 @@ config_version(nng_tls_engine_config *cfg, nng_tls_version min_ver,
         case NNG_TLS_1_3:
                 break;
         default:
-                ERR;
                 return (NNG_ENOTSUP);
         }
 
         rv = tls_config_set_protocols(cfg->config, versions);
-        if (rv != 0) {
-                ERR;
-        }
-
 	return (rv);
 }
 
@@ -306,7 +294,6 @@ config_auth_mode(nng_tls_engine_config *cfg, nng_tls_auth_mode mode)
                 tls_config_verify(cfg->config);
                 return (0);
         default:
-                ERR;
                 return (NNG_EINVAL);
         }
 }
@@ -323,14 +310,12 @@ config_ca_chain(nng_tls_engine_config *cfg, const char *certs, const char *crl)
         len = strlen(certs);
 
         if ((rv = tls_config_set_ca_mem(cfg->config, pem, len)) != 0) {
-                ERR;
                 return (rv);
         }
         if (crl != NULL) {
                 pem = (const uint8_t *) crl;
                 len = strlen(crl);
                 if ((rv = tls_config_set_crl_mem(cfg->config, pem, len)) != 0) {
-                        ERR;
                         return (rv);
                 }
         }
@@ -359,7 +344,6 @@ config_own_cert(nng_tls_engine_config *cfg, const char *cert, const char *key,
         rv = tls_config_set_keypair_mem(cfg->config, (uint8_t *) cert, clen,
                                         (uint8_t *) key, klen);
         if (rv != 0) {
-                ERR;
                 return (rv);
         }
 
@@ -433,15 +417,11 @@ nng_tls_engine_init_libtls(void)
         int rv;
 
         rv = nng_tls_engine_register(&tls_engine_libtls);
-        if (rv != 0) {
-                ERR;
-        }
-
         return (rv);
 }
 
 void
 nng_tls_engine_fini_libtls(void)
 {
-        // TODO
+        // nop
 }
