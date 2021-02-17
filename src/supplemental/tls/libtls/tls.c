@@ -421,7 +421,9 @@ config_own_cert(nng_tls_engine_config *cfg, const char *cert, const char *key,
         clen = strlen(cert) + 1;
         klen = strlen(key) + 1;
 
-        rv = tls_config_set_keypair_mem(cfg->config, cert, clen, key, klen);
+        rv = tls_config_set_keypair_mem(cfg->config,
+                                        (uint8_t *) cert, clen,
+                                        (uint8_t *) key, klen);
         if (rv != 0) {
                 printf("DEBUG(%s): %s\n", __func__, tls_config_error(cfg->config));
                 return (rv);
